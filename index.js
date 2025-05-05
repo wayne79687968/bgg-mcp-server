@@ -6,6 +6,7 @@ import * as prometheus from 'prom-client';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import xml2js from 'xml2js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -188,7 +189,8 @@ class BGGServer {
         exact ? 'exact=1' : ''
       ].filter(Boolean).join('&');
       const response = await axios.get(`${BASE_URL}/search?${params}`);
-      return response.data;
+      const result = await xml2js.parseStringPromise(response.data, { explicitArray: false });
+      return result;
     } catch (error) {
       throw new McpError(ErrorCode.InternalError, `Search failed: ${error.message}`);
     }
@@ -202,7 +204,8 @@ class BGGServer {
         stats ? 'stats=1' : ''
       ].filter(Boolean).join('&');
       const response = await axios.get(`${BASE_URL}/thing?${params}`);
-      return response.data;
+      const result = await xml2js.parseStringPromise(response.data, { explicitArray: false });
+      return result;
     } catch (error) {
       throw new McpError(ErrorCode.InternalError, `Get thing failed: ${error.message}`);
     }
