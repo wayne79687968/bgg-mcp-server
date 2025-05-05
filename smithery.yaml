@@ -2,21 +2,10 @@ startCommand:
   type: stdio
   configSchema:
     type: object
+    required: []
     properties: {}
   commandFunction: |
     (config) => ({
       command: "node",
-      args: ["index.js"],
-      env: {
-        NODE_ENV: "production"
-      }
+      args: ["index.js"]
     })
-
-deployment:
-  timeout: 120
-  maxRetries: 3
-  healthCheck:
-    path: "/health"
-    interval: 30
-    timeout: 5
-    retries: 3
