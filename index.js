@@ -9,6 +9,56 @@ const BASE_URL = 'https://boardgamegeek.com/xmlapi2';
 app.use(cors());
 app.use(express.json());
 
+// 將工具列表定義移到函數中
+const getToolsList = () => [
+  {
+    name: "search_game",
+    description: "依照名稱搜尋桌遊",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "搜尋關鍵字" },
+        exact: { type: "boolean", description: "是否要精確比對", default: false }
+      },
+      required: ["query"]
+    }
+  },
+  {
+    name: "get_thing",
+    description: "查詢指定 id 的桌遊詳細資料",
+    parameters: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "遊戲的 BGG ID" },
+        stats: { type: "boolean", description: "是否取得排名資料", default: true }
+      },
+      required: ["id"]
+    }
+  },
+  {
+    name: "get_hot_items",
+    description: "取得目前熱門的桌遊",
+    parameters: {
+      type: "object",
+      properties: {
+        type: { type: "string", description: "熱門類型，如 boardgame", default: "boardgame" }
+      }
+    }
+  },
+  {
+    name: "get_user_collection",
+    description: "查詢指定使用者的收藏清單",
+    parameters: {
+      type: "object",
+      properties: {
+        username: { type: "string", description: "使用者帳號名稱" }
+      },
+      required: ["username"]
+    }
+  }
+];
+
+// 修改 manifest 路由處理
 app.get('/manifest.json', (req, res) => {
   res.json({
     schema_version: "v1",
@@ -21,53 +71,7 @@ app.get('/manifest.json', (req, res) => {
       type: "openai_function",
       url: `http://${req.headers.host}/functions`
     },
-    functions: [
-      {
-        name: "search_game",
-        description: "依照名稱搜尋桌遊",
-        parameters: {
-          type: "object",
-          properties: {
-            query: { type: "string", description: "搜尋關鍵字" },
-            exact: { type: "boolean", description: "是否要精確比對", default: false }
-          },
-          required: ["query"]
-        }
-      },
-      {
-        name: "get_thing",
-        description: "查詢指定 id 的桌遊詳細資料",
-        parameters: {
-          type: "object",
-          properties: {
-            id: { type: "string", description: "遊戲的 BGG ID" },
-            stats: { type: "boolean", description: "是否取得排名資料", default: true }
-          },
-          required: ["id"]
-        }
-      },
-      {
-        name: "get_hot_items",
-        description: "取得目前熱門的桌遊",
-        parameters: {
-          type: "object",
-          properties: {
-            type: { type: "string", description: "熱門類型，如 boardgame", default: "boardgame" }
-          }
-        }
-      },
-      {
-        name: "get_user_collection",
-        description: "查詢指定使用者的收藏清單",
-        parameters: {
-          type: "object",
-          properties: {
-            username: { type: "string", description: "使用者帳號名稱" }
-          },
-          required: ["username"]
-        }
-      }
-    ]
+    functions: getToolsList()
   });
 });
 
