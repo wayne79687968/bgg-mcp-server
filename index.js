@@ -9,7 +9,21 @@ const BASE_URL = 'https://boardgamegeek.com/xmlapi2';
 app.use(cors());
 app.use(express.json());
 
-// 將工具列表定義移到函數中
+// 基本配置，不包含任何需要認證的資訊
+const getBaseConfig = (host) => ({
+  schema_version: "v1",
+  name_for_human: "BGG API MCP",
+  name_for_model: "bgg_api",
+  description_for_human: "查詢 BGG 桌遊、熱門、收藏等資料",
+  description_for_model: "使用 BGG XML API 查詢桌遊、收藏、熱門項目與詳細資訊",
+  auth: { type: "none" },
+  api: {
+    type: "openai_function",
+    url: `http://${host}/functions`
+  }
+});
+
+// 工具列表定義，不包含任何需要認證的資訊
 const getToolsList = () => [
   {
     name: "search_game",
@@ -58,67 +72,84 @@ const getToolsList = () => [
   }
 ];
 
-// 修改 manifest 路由處理
+// 修改 manifest 路由處理，實現延遲載入
 app.get('/manifest.json', (req, res) => {
+  const baseConfig = getBaseConfig(req.headers.host);
   res.json({
-    schema_version: "v1",
-    name_for_human: "BGG API MCP",
-    name_for_model: "bgg_api",
-    description_for_human: "查詢 BGG 桌遊、熱門、收藏等資料",
-    description_for_model: "使用 BGG XML API 查詢桌遊、收藏、熱門項目與詳細資訊",
-    auth: { type: "none" },
-    api: {
-      type: "openai_function",
-      url: `http://${req.headers.host}/functions`
-    },
+    ...baseConfig,
     functions: getToolsList()
   });
 });
 
+// 修改 functions 路由處理，實現延遲載入
 app.post('/functions', async (req, res) => {
   const { function_call, arguments: argsString } = req.body;
   const args = JSON.parse(argsString || '{}');
 
   try {
+    // 在實際執行函數時才建立 axios 實例
+    const axiosInstance = axios.create({
+      timeout: 30000, // 30 秒超時
+      headers: {
+        'Accept': 'application/xml'
+      }
+    });
+
+    let result;
     switch (function_call.name) {
       case 'search_game':
-        return res.json({ result: await searchGame(args.query, args.exact) });
+        result = await searchGame(axiosInstance, args.query, args.exact);
+        break;
       case 'get_thing':
-        return res.json({ result: await getThing(args.id, args.stats) });
+        result = await getThing(axiosInstance, args.id, args.stats);
+        break;
       case 'get_hot_items':
-        return res.json({ result: await getHotItems(args.type) });
+        result = await getHotItems(axiosInstance, args.type);
+        break;
       case 'get_user_collection':
-        return res.json({ result: await getUserCollection(args.username) });
+        result = await getUserCollection(axiosInstance, args.username);
+        break;
       default:
         return res.status(400).json({ error: 'Unknown function name' });
     }
+
+    return res.json({ result });
   } catch (err) {
+    console.error('Error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
 
-async function searchGame(query, exact = false) {
+// 修改所有 API 函數以接受 axios 實例
+async function searchGame(axiosInstance, query, exact = false) {
   const url = `${BASE_URL}/search?query=${encodeURIComponent(query)}&exact=${exact ? 1 : 0}`;
-  const { data } = await axios.get(url);
+  const { data } = await axiosInstance.get(url);
   return data;
 }
 
-async function getThing(id, stats = true) {
+async function getThing(axiosInstance, id, stats = true) {
   const url = `${BASE_URL}/thing?id=${id}&stats=${stats ? 1 : 0}`;
-  const { data } = await axios.get(url);
+  const { data } = await axiosInstance.get(url);
   return data;
 }
 
-async function getHotItems(type = 'boardgame') {
+async function getHotItems(axiosInstance, type = 'boardgame') {
   const url = `${BASE_URL}/hot?type=${type}`;
-  const { data } = await axios.get(url);
+  const { data } = await axiosInstance.get(url);
   return data;
 }
 
-async function getUserCollection(username) {
+async function getUserCollection(axiosInstance, username) {
   const url = `${BASE_URL}/collection?username=${username}&stats=1`;
-  const { data } = await axios.get(url);
+  const { data } = await axiosInstance.get(url);
   return data;
 }
 
-app.listen(PORT);
+// 添加健康檢查端點
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
