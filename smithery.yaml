@@ -9,3 +9,13 @@ startCommand:
       args: ["index.js"],
       env: {}
     })
+
+healthCheck:
+  path: "/manifest.json"
+  interval: 30
+  timeout: 5
+  retries: 3
+
+deployment:
+  timeout: 60
+  maxRetries: 3
