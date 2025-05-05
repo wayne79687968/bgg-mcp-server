@@ -3,11 +3,32 @@ import axios from 'axios';
 import cors from 'cors';
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const BASE_URL = 'https://boardgamegeek.com/xmlapi2';
 
+// 中間件設置
 app.use(cors());
 app.use(express.json());
+
+// 錯誤處理中間件
+const errorHandler = (err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({
+    error: {
+      message: err.message,
+      type: err.name,
+      code: err.code || 'INTERNAL_ERROR'
+    }
+  });
+};
+
+// 請求日誌中間件
+const requestLogger = (req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+};
+
+app.use(requestLogger);
 
 // 基本配置，不包含任何需要認證的資訊
 const getBaseConfig = (host) => ({
@@ -145,11 +166,20 @@ async function getUserCollection(axiosInstance, username) {
   return data;
 }
 
-// 添加健康檢查端點
+// 健康檢查端點
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok' });
+  res.status(200).json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    version: '1.0.0'
+  });
 });
 
+// 錯誤處理中間件
+app.use(errorHandler);
+
+// 啟動伺服器
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  console.log(`Environment: ${process.env.NODE_ENV}`);
 });

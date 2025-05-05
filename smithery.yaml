@@ -7,15 +7,16 @@ startCommand:
     (config) => ({
       command: "node",
       args: ["index.js"],
-      env: {}
+      env: {
+        NODE_ENV: "production"
+      }
     })
 
-healthCheck:
-  path: "/manifest.json"
-  interval: 30
-  timeout: 5
-  retries: 3
-
 deployment:
-  timeout: 60
+  timeout: 120
   maxRetries: 3
+  healthCheck:
+    path: "/health"
+    interval: 30
+    timeout: 5
+    retries: 3
