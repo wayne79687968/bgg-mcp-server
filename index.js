@@ -1,6 +1,6 @@
-const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
+import express from 'express';
+import axios from 'axios';
+import cors from 'cors';
 
 const app = express();
 const PORT = 3000;
@@ -72,8 +72,8 @@ app.get('/manifest.json', (req, res) => {
 });
 
 app.post('/functions', async (req, res) => {
-  const { function_call, arguments } = req.body;
-  const args = JSON.parse(arguments || '{}');
+  const { function_call, arguments: argsString } = req.body;
+  const args = JSON.parse(argsString || '{}');
 
   try {
     switch (function_call.name) {
@@ -117,4 +117,4 @@ async function getUserCollection(username) {
   return data;
 }
 
-app.listen(PORT); // ❗不要印 log
+app.listen(PORT);
