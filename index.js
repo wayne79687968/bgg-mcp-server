@@ -1,9 +1,11 @@
 import express from 'express';
 import axios from 'axios';
 import cors from 'cors';
-import { createClient } from 'redis';
 import rateLimit from 'express-rate-limit';
-import prometheus from 'prom-client';
+import * as prometheus from 'prom-client';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { ListToolsRequestSchema, CallToolRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,34 +33,7 @@ const requestLogger = (req, res, next) => {
 
 app.use(requestLogger);
 
-// 首先安裝 Redis 依賴
-// npm install redis
-
-const redisClient = createClient({
-  url: process.env.REDIS_URL || 'redis://localhost:6379'
-});
-
-// 快取工具列表
-const TOOLS_CACHE_KEY = 'bgg:tools:list';
-const CACHE_TTL = 3600; // 1小時
-
-async function getToolsList() {
-  try {
-    const cachedTools = await redisClient.get(TOOLS_CACHE_KEY);
-    if (cachedTools) {
-      return JSON.parse(cachedTools);
-    }
-
-    // 如果快取不存在，使用靜態工具列表
-    await redisClient.setEx(TOOLS_CACHE_KEY, CACHE_TTL, JSON.stringify(toolsList));
-    return toolsList;
-  } catch (error) {
-    console.error('Redis error:', error);
-    return toolsList; // 降級使用靜態列表
-  }
-}
-
-// 快取基本配置
+// 基本配置
 const baseConfig = {
   schema_version: "v1",
   name_for_human: "BGG API MCP",
@@ -68,7 +43,7 @@ const baseConfig = {
   auth: { type: "none" }
 };
 
-// 快取工具列表
+// 工具列表
 const toolsList = [
   {
     name: "search_game",
@@ -117,100 +92,107 @@ const toolsList = [
   }
 ];
 
-// Manifest 路由 - 使用快取的配置
+// Manifest 路由
 app.get('/manifest.json', (req, res) => {
   res.json({
     ...baseConfig,
     api: {
-      type: "openai_function",
-      url: `http://${req.headers.host}/functions`
+      type: "openapi",
+      url: `http://${req.headers.host}/openapi.json`
     },
+    logo_url: 'https://boardgamegeek.com/favicon.ico',
+    contact_email: 'support@example.com',
+    legal_info_url: 'https://boardgamegeek.com/terms',
     functions: toolsList
   });
 });
 
-// Functions 路由
-app.post('/functions', async (req, res, next) => {
-  try {
-    const { function_call, arguments: argsString } = req.body;
-    const args = JSON.parse(argsString || '{}');
-
-    // 建立單一 Axios 實例
-    const bggApi = axios.create({
-      baseURL: BASE_URL,
-      timeout: 30000,
-      headers: {
-        'Accept': 'application/xml',
-        'User-Agent': 'BGG-MCP-Server/1.0'
+class BGGServer {
+  constructor() {
+    this.server = new Server({
+      name: 'bgg-mcp-server',
+      version: '0.1.0'
+    }, {
+      capabilities: {
+        resources: {},
+        tools: {}
       }
     });
-
-    // 添加重試機制
-    bggApi.interceptors.response.use(null, async (error) => {
-      const { config } = error;
-      if (!config || !config.retry) {
-        return Promise.reject(error);
-      }
-
-      config.retry -= 1;
-      const backoff = new Promise(resolve => setTimeout(resolve, config.retryDelay || 1000));
-      await backoff;
-      return bggApi(config);
-    });
-
-    let result;
-    switch (function_call.name) {
-      case 'search_game':
-        result = await searchGame(bggApi, args.query, args.exact);
-        break;
-      case 'get_thing':
-        result = await getThing(bggApi, args.id, args.stats);
-        break;
-      case 'get_hot_items':
-        result = await getHotItems(bggApi, args.type);
-        break;
-      case 'get_user_collection':
-        result = await getUserCollection(bggApi, args.username);
-        break;
-      default:
-        return res.status(400).json({
-          error: {
-            message: 'Unknown function name',
-            type: 'INVALID_FUNCTION',
-            code: 'UNKNOWN_FUNCTION'
-          }
-        });
-    }
-
-    return res.json({ result });
-  } catch (err) {
-    next(err);
+    this.setupToolHandlers();
+    this.server.onerror = (error) => console.error('[MCP Error]', error);
   }
-});
 
-// API 函數
-async function searchGame(bggApi, query, exact = false) {
-  const url = `${BASE_URL}/search?query=${encodeURIComponent(query)}&exact=${exact ? 1 : 0}`;
-  const { data } = await bggApi.get(url);
-  return data;
-}
+  setupToolHandlers() {
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      return {
+        tools: toolsList
+      };
+    });
 
-async function getThing(bggApi, id, stats = true) {
-  const url = `${BASE_URL}/thing?id=${id}&stats=${stats ? 1 : 0}`;
-  const { data } = await bggApi.get(url);
-  return data;
-}
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+      let result;
 
-async function getHotItems(bggApi, type = 'boardgame') {
-  const url = `${BASE_URL}/hot?type=${type}`;
-  const { data } = await bggApi.get(url);
-  return data;
-}
+      try {
+        switch (name) {
+          case 'search_game':
+            const searchArgs = JSON.parse(args);
+            if (!searchArgs.query) {
+              throw new McpError(ErrorCode.InvalidParams, 'Query parameter is required');
+            }
+            result = await this.searchGame(searchArgs.query);
+            break;
 
-async function getUserCollection(bggApi, username) {
-  const url = `${BASE_URL}/collection?username=${username}&stats=1`;
-  const { data } = await bggApi.get(url);
-  return data;
+          case 'get_thing':
+            const thingArgs = JSON.parse(args);
+            if (!thingArgs.id) {
+              throw new McpError(ErrorCode.InvalidParams, 'ID parameter is required');
+            }
+            result = await this.getThing(thingArgs.id);
+            break;
+
+          default:
+            throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text: result
+          }]
+        };
+      } catch (error) {
+        if (error instanceof McpError) {
+          throw error;
+        }
+        throw new McpError(ErrorCode.InternalError, `Operation failed: ${error.message}`);
+      }
+    });
+  }
+
+  async searchGame(query) {
+    try {
+      const response = await axios.get(`${BASE_URL}/search?search=${encodeURIComponent(query)}`);
+      return response.data;
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Search failed: ${error.message}`);
+    }
+  }
+
+  async getThing(id) {
+    try {
+      const response = await axios.get(`${BASE_URL}/thing?id=${id}`);
+      return response.data;
+    } catch (error) {
+      throw new McpError(ErrorCode.InternalError, `Get thing failed: ${error.message}`);
+    }
+  }
+
+  async run() {
+    const transport = new StdioServerTransport();
+    await this.server.connect(transport);
+    console.error('BGG MCP server running on stdio');
+  }
 }
 
 // 健康檢查端點
@@ -249,9 +231,7 @@ const errorHandler = (err, req, res, next) => {
 
 app.use(errorHandler);
 
-// 安裝 express-rate-limit
-// npm install express-rate-limit
-
+// 請求限制
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15分鐘
   max: 100 // 限制每個 IP 100 個請求
@@ -259,18 +239,9 @@ const limiter = rateLimit({
 
 app.use('/functions', limiter);
 
-// 安裝 prom-client
-// npm install prom-client
-
+// 監控設定
 const collectDefaultMetrics = prometheus.collectDefaultMetrics;
 collectDefaultMetrics({ timeout: 5000 });
-
-const httpRequestDurationMicroseconds = new prometheus.Histogram({
-  name: 'http_request_duration_seconds',
-  help: 'Duration of HTTP requests in seconds',
-  labelNames: ['method', 'route', 'status_code'],
-  buckets: [0.1, 0.5, 1, 2, 5]
-});
 
 // 添加監控端點
 app.get('/metrics', async (req, res) => {
@@ -279,7 +250,20 @@ app.get('/metrics', async (req, res) => {
 });
 
 // 啟動伺服器
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV}`);
-});
+async function startServer() {
+  try {
+    app.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+      console.log(`Environment: ${process.env.NODE_ENV}`);
+    });
+
+    // 啟動 MCP 伺服器
+    const server = new BGGServer();
+    await server.run();
+  } catch (error) {
+    console.error('Server startup failed:', error);
+    process.exit(1);
+  }
+}
+
+startServer().catch(console.error);
