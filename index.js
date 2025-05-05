@@ -47,45 +47,47 @@ const baseConfig = {
 const toolsList = [
   {
     name: "search_game",
-    description: "依照名稱搜尋桌遊",
+    description: "Search board games by name. You can specify type (boardgame, boardgameexpansion, boardgameaccessory, rpgitem, videogame, boardgamedesigner).",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "搜尋關鍵字" },
-        exact: { type: "boolean", description: "是否要精確比對", default: false }
+        query: { type: "string", description: "Search keyword" },
+        type: { type: "string", description: "Type to search, default is boardgame. Multiple types can be separated by commas.", default: "boardgame" },
+        exact: { type: "boolean", description: "Whether to match exactly", default: false }
       },
       required: ["query"]
     }
   },
   {
     name: "get_thing",
-    description: "查詢指定 id 的桌遊詳細資料",
+    description: "Get detailed information for the specified id(s) (up to 20) of board games.",
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "遊戲的 BGG ID" },
-        stats: { type: "boolean", description: "是否取得排名資料", default: true }
+        id: { type: "string", description: "BGG ID(s) of the game(s), can be comma-separated, up to 20" },
+        type: { type: "string", description: "Filter returned types (optional)" },
+        stats: { type: "boolean", description: "Whether to include ranking stats", default: true }
       },
       required: ["id"]
     }
   },
   {
     name: "get_hot_items",
-    description: "取得目前熱門的桌遊",
+    description: "Get the current hot board games.",
     inputSchema: {
       type: "object",
       properties: {
-        type: { type: "string", description: "熱門類型，如 boardgame", default: "boardgame" }
+        type: { type: "string", description: "Hot item type, e.g. boardgame", default: "boardgame" }
       }
     }
   },
   {
     name: "get_user_collection",
-    description: "查詢指定使用者的收藏清單",
+    description: "Get the collection list of the specified user.",
     inputSchema: {
       type: "object",
       properties: {
-        username: { type: "string", description: "使用者帳號名稱" }
+        username: { type: "string", description: "Username" }
       },
       required: ["username"]
     }
@@ -135,22 +137,30 @@ class BGGServer {
 
       try {
         switch (name) {
-          case 'search_game':
+          case 'search_game': {
             const searchArgs = JSON.parse(args);
             if (!searchArgs.query) {
               throw new McpError(ErrorCode.InvalidParams, 'Query parameter is required');
             }
-            result = await this.searchGame(searchArgs.query);
+            result = await this.searchGame(
+              searchArgs.query,
+              searchArgs.type || 'boardgame',
+              searchArgs.exact ?? false
+            );
             break;
-
-          case 'get_thing':
+          }
+          case 'get_thing': {
             const thingArgs = JSON.parse(args);
             if (!thingArgs.id) {
               throw new McpError(ErrorCode.InvalidParams, 'ID parameter is required');
             }
-            result = await this.getThing(thingArgs.id);
+            result = await this.getThing(
+              thingArgs.id,
+              thingArgs.type || '',
+              thingArgs.stats ?? true
+            );
             break;
-
+          }
           default:
             throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
@@ -170,18 +180,28 @@ class BGGServer {
     });
   }
 
-  async searchGame(query) {
+  async searchGame(query, type = 'boardgame', exact = false) {
     try {
-      const response = await axios.get(`${BASE_URL}/search?search=${encodeURIComponent(query)}`);
+      const params = [
+        `search=${encodeURIComponent(query)}`,
+        type ? `type=${encodeURIComponent(type)}` : '',
+        exact ? 'exact=1' : ''
+      ].filter(Boolean).join('&');
+      const response = await axios.get(`${BASE_URL}/search?${params}`);
       return response.data;
     } catch (error) {
       throw new McpError(ErrorCode.InternalError, `Search failed: ${error.message}`);
     }
   }
 
-  async getThing(id) {
+  async getThing(id, type = '', stats = true) {
     try {
-      const response = await axios.get(`${BASE_URL}/thing?id=${id}`);
+      const params = [
+        `id=${encodeURIComponent(id)}`,
+        type ? `type=${encodeURIComponent(type)}` : '',
+        stats ? 'stats=1' : ''
+      ].filter(Boolean).join('&');
+      const response = await axios.get(`${BASE_URL}/thing?${params}`);
       return response.data;
     } catch (error) {
       throw new McpError(ErrorCode.InternalError, `Get thing failed: ${error.message}`);
